@@ -12,6 +12,8 @@ const COLORS: &[&str] = &[
 
 pub const NODE_RADIUS: f64 = 5.0;
 pub const HIT_RADIUS: f64 = 12.0;
+/// Minimum node radius in screen pixels (prevents nodes from becoming invisible when zoomed out)
+pub const MIN_SCREEN_RADIUS: f64 = 5.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct NodeInfo {
@@ -141,11 +143,14 @@ impl ForceGraphState {
 
 	pub fn node_at_position(&self, sx: f64, sy: f64) -> Option<DefaultNodeIdx> {
 		let (gx, gy) = self.screen_to_graph(sx, sy);
+		let k = self.transform.k;
+		// Use effective hit radius that respects minimum screen size
+		let min_world_radius = MIN_SCREEN_RADIUS / k;
+		let hit_radius = HIT_RADIUS.max(min_world_radius);
 		let mut found = None;
 		self.graph.visit_nodes(|node| {
 			let (dx, dy) = (node.x() as f64 - gx, node.y() as f64 - gy);
-			// HIT_RADIUS is in world-space, scales with zoom like nodes
-			if (dx * dx + dy * dy).sqrt() < HIT_RADIUS {
+			if (dx * dx + dy * dy).sqrt() < hit_radius {
 				found = Some(node.index());
 			}
 		});
