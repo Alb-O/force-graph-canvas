@@ -6,8 +6,15 @@ use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, MouseEvent, WheelEvent, Window};
 
 use super::render;
+use super::scale::ScaleConfig;
 use super::state::ForceGraphState;
 use super::types::GraphData;
+
+/// Internal state holder combining graph state with its scale configuration.
+struct GraphContext {
+	state: ForceGraphState,
+	scale: ScaleConfig,
+}
 
 #[component]
 pub fn ForceGraphCanvas(
@@ -17,11 +24,11 @@ pub fn ForceGraphCanvas(
 	#[prop(default = None)] height: Option<f64>,
 ) -> impl IntoView {
 	let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
-	let state: Rc<RefCell<Option<ForceGraphState>>> = Rc::new(RefCell::new(None));
+	let context: Rc<RefCell<Option<GraphContext>>> = Rc::new(RefCell::new(None));
 	let animate: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
 	let resize_cb: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
-	let (state_init, animate_init, resize_cb_init) =
-		(state.clone(), animate.clone(), resize_cb.clone());
+	let (context_init, animate_init, resize_cb_init) =
+		(context.clone(), animate.clone(), resize_cb.clone());
 
 	Effect::new(move |_| {
 		let Some(canvas) = canvas_ref.get() else {
@@ -60,10 +67,13 @@ pub fn ForceGraphCanvas(
 			.unwrap()
 			.dyn_into()
 			.unwrap();
-		*state_init.borrow_mut() = Some(ForceGraphState::new(&data.get(), w, h));
+		*context_init.borrow_mut() = Some(GraphContext {
+			state: ForceGraphState::new(&data.get(), w, h),
+			scale: ScaleConfig::default(),
+		});
 
 		if fullscreen {
-			let (state_resize, canvas_resize) = (state_init.clone(), canvas.clone());
+			let (context_resize, canvas_resize) = (context_init.clone(), canvas.clone());
 			*resize_cb_init.borrow_mut() = Some(Closure::new(move || {
 				let win: Window = web_sys::window().unwrap();
 				let (nw, nh) = (
@@ -72,8 +82,8 @@ pub fn ForceGraphCanvas(
 				);
 				canvas_resize.set_width(nw as u32);
 				canvas_resize.set_height(nh as u32);
-				if let Some(ref mut s) = *state_resize.borrow_mut() {
-					s.resize(nw, nh);
+				if let Some(ref mut c) = *context_resize.borrow_mut() {
+					c.state.resize(nw, nh);
 				}
 			}));
 			if let Some(ref cb) = *resize_cb_init.borrow() {
@@ -82,13 +92,13 @@ pub fn ForceGraphCanvas(
 			}
 		}
 
-		let (state_anim, animate_inner) = (state_init.clone(), animate_init.clone());
+		let (context_anim, animate_inner) = (context_init.clone(), animate_init.clone());
 		*animate_init.borrow_mut() = Some(Closure::new(move || {
-			if let Some(ref mut s) = *state_anim.borrow_mut() {
-				if s.animation_running {
-					s.tick(0.016);
+			if let Some(ref mut c) = *context_anim.borrow_mut() {
+				if c.state.animation_running {
+					c.state.tick(0.016);
 				}
-				render::render(s, &ctx);
+				render::render(&c.state, &ctx, &c.scale);
 			}
 			if let Some(ref cb) = *animate_inner.borrow() {
 				let _ = web_sys::window()
@@ -101,7 +111,7 @@ pub fn ForceGraphCanvas(
 		}
 	});
 
-	let state_md = state.clone();
+	let context_md = context.clone();
 	let on_mousedown = move |ev: MouseEvent| {
 		let canvas: HtmlCanvasElement = canvas_ref.get().unwrap().into();
 		let rect = canvas.get_bounding_client_rect();
@@ -110,29 +120,29 @@ pub fn ForceGraphCanvas(
 			ev.client_y() as f64 - rect.top(),
 		);
 
-		if let Some(ref mut s) = *state_md.borrow_mut() {
-			if let Some(idx) = s.node_at_position(x, y) {
-				s.drag.active = true;
-				s.drag.node_idx = Some(idx);
-				s.drag.start_x = x;
-				s.drag.start_y = y;
-				s.graph.visit_nodes(|node| {
+		if let Some(ref mut c) = *context_md.borrow_mut() {
+			if let Some(idx) = c.state.node_at_position(x, y, &c.scale) {
+				c.state.drag.active = true;
+				c.state.drag.node_idx = Some(idx);
+				c.state.drag.start_x = x;
+				c.state.drag.start_y = y;
+				c.state.graph.visit_nodes(|node| {
 					if node.index() == idx {
-						s.drag.node_start_x = node.x();
-						s.drag.node_start_y = node.y();
+						c.state.drag.node_start_x = node.x();
+						c.state.drag.node_start_y = node.y();
 					}
 				});
 			} else {
-				s.pan.active = true;
-				s.pan.start_x = x;
-				s.pan.start_y = y;
-				s.pan.transform_start_x = s.transform.x;
-				s.pan.transform_start_y = s.transform.y;
+				c.state.pan.active = true;
+				c.state.pan.start_x = x;
+				c.state.pan.start_y = y;
+				c.state.pan.transform_start_x = c.state.transform.x;
+				c.state.pan.transform_start_y = c.state.transform.y;
 			}
 		}
 	};
 
-	let state_mm = state.clone();
+	let context_mm = context.clone();
 	let on_mousemove = move |ev: MouseEvent| {
 		let canvas: HtmlCanvasElement = canvas_ref.get().unwrap().into();
 		let rect = canvas.get_bounding_client_rect();
@@ -141,24 +151,24 @@ pub fn ForceGraphCanvas(
 			ev.client_y() as f64 - rect.top(),
 		);
 
-		if let Some(ref mut s) = *state_mm.borrow_mut() {
+		if let Some(ref mut c) = *context_mm.borrow_mut() {
 			// Update hover state when not dragging
-			if !s.drag.active {
-				let hovered = s.node_at_position(x, y);
-				s.set_hover(hovered);
+			if !c.state.drag.active {
+				let hovered = c.state.node_at_position(x, y, &c.scale);
+				c.state.set_hover(hovered);
 			}
 
-			if s.drag.active {
-				if let Some(idx) = s.drag.node_idx {
+			if c.state.drag.active {
+				if let Some(idx) = c.state.drag.node_idx {
 					let (dx, dy) = (
-						(x - s.drag.start_x) / s.transform.k,
-						(y - s.drag.start_y) / s.transform.k,
+						(x - c.state.drag.start_x) / c.state.transform.k,
+						(y - c.state.drag.start_y) / c.state.transform.k,
 					);
 					let (nx, ny) = (
-						s.drag.node_start_x + dx as f32,
-						s.drag.node_start_y + dy as f32,
+						c.state.drag.node_start_x + dx as f32,
+						c.state.drag.node_start_y + dy as f32,
 					);
-					s.graph.visit_nodes_mut(|node| {
+					c.state.graph.visit_nodes_mut(|node| {
 						if node.index() == idx {
 							node.data.x = nx;
 							node.data.y = ny;
@@ -166,42 +176,42 @@ pub fn ForceGraphCanvas(
 						}
 					});
 				}
-			} else if s.pan.active {
-				s.transform.x = s.pan.transform_start_x + (x - s.pan.start_x);
-				s.transform.y = s.pan.transform_start_y + (y - s.pan.start_y);
+			} else if c.state.pan.active {
+				c.state.transform.x = c.state.pan.transform_start_x + (x - c.state.pan.start_x);
+				c.state.transform.y = c.state.pan.transform_start_y + (y - c.state.pan.start_y);
 			}
 		}
 	};
 
-	let state_mu = state.clone();
+	let context_mu = context.clone();
 	let on_mouseup = move |_: MouseEvent| {
-		if let Some(ref mut s) = *state_mu.borrow_mut() {
-			if s.drag.active {
-				if let Some(idx) = s.drag.node_idx {
-					s.graph.visit_nodes_mut(|node| {
+		if let Some(ref mut c) = *context_mu.borrow_mut() {
+			if c.state.drag.active {
+				if let Some(idx) = c.state.drag.node_idx {
+					c.state.graph.visit_nodes_mut(|node| {
 						if node.index() == idx {
 							node.data.is_anchor = true;
 						}
 					});
 				}
 			}
-			s.drag.active = false;
-			s.drag.node_idx = None;
-			s.pan.active = false;
+			c.state.drag.active = false;
+			c.state.drag.node_idx = None;
+			c.state.pan.active = false;
 		}
 	};
 
-	let state_ml = state.clone();
+	let context_ml = context.clone();
 	let on_mouseleave = move |_: MouseEvent| {
-		if let Some(ref mut s) = *state_ml.borrow_mut() {
-			s.drag.active = false;
-			s.drag.node_idx = None;
-			s.pan.active = false;
-			s.set_hover(None);
+		if let Some(ref mut c) = *context_ml.borrow_mut() {
+			c.state.drag.active = false;
+			c.state.drag.node_idx = None;
+			c.state.pan.active = false;
+			c.state.set_hover(None);
 		}
 	};
 
-	let state_wh = state.clone();
+	let context_wh = context.clone();
 	let on_wheel = move |ev: WheelEvent| {
 		ev.prevent_default();
 		let canvas: HtmlCanvasElement = canvas_ref.get().unwrap().into();
@@ -211,13 +221,13 @@ pub fn ForceGraphCanvas(
 			ev.client_y() as f64 - rect.top(),
 		);
 
-		if let Some(ref mut s) = *state_wh.borrow_mut() {
+		if let Some(ref mut c) = *context_wh.borrow_mut() {
 			let factor = if ev.delta_y() > 0.0 { 0.9 } else { 1.1 };
-			let new_k = (s.transform.k * factor).clamp(0.1, 10.0);
-			let ratio = new_k / s.transform.k;
-			s.transform.x = x - (x - s.transform.x) * ratio;
-			s.transform.y = y - (y - s.transform.y) * ratio;
-			s.transform.k = new_k;
+			let new_k = (c.state.transform.k * factor).clamp(0.1, 10.0);
+			let ratio = new_k / c.state.transform.k;
+			c.state.transform.x = x - (x - c.state.transform.x) * ratio;
+			c.state.transform.y = y - (y - c.state.transform.y) * ratio;
+			c.state.transform.k = new_k;
 		}
 	};
 

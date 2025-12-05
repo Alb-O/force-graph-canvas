@@ -1,5 +1,6 @@
 mod component;
 mod render;
+pub mod scale;
 mod state;
 mod types;
 
