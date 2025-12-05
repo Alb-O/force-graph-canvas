@@ -127,6 +127,9 @@ pub struct EdgeScaleConfig {
 	pub dash_pattern: (f64, f64),
 	/// Flow animation speed (world units per second).
 	pub flow_speed: f64,
+	/// How dash pattern alpha/visibility scales with zoom.
+	/// When faded out, edges become solid lines.
+	pub dash_alpha_behavior: AlphaBehavior,
 }
 
 /// Configuration for arrow visual scaling.
@@ -184,7 +187,11 @@ impl Default for ScaleConfig {
 			edge: EdgeScaleConfig {
 				line_width: 1.5,
 				dash_pattern: (8.0, 4.0),
-				flow_speed: 30.0,
+				flow_speed: 12.0,
+				dash_alpha_behavior: AlphaBehavior::Fade {
+					zero_alpha_k: 0.4,
+					full_alpha_k: 0.9,
+				},
 			},
 			arrow: ArrowScaleConfig {
 				size: 5.0,
@@ -227,6 +234,8 @@ pub struct ScaledValues {
 	pub edge_line_width: f64,
 	/// Dash pattern in world-space.
 	pub dash_pattern: (f64, f64),
+	/// Dash pattern visibility [0, 1]. At 0, edges are solid lines.
+	pub dash_alpha: f64,
 	/// Arrow size in world-space.
 	pub arrow_size: f64,
 	/// Arrow alpha multiplier [0, 1].
@@ -246,6 +255,7 @@ impl ScaledValues {
 		let hit_radius = config.node.hit_behavior.apply(config.node.hit_radius, k);
 		let label_font_size = config.node.label_size / k.max(config.node.label_min_k);
 		let arrow_alpha = config.arrow.alpha_behavior.apply(k);
+		let dash_alpha = config.edge.dash_alpha_behavior.apply(k);
 
 		Self {
 			k,
@@ -254,6 +264,7 @@ impl ScaledValues {
 			label_font: format!("{}px sans-serif", label_font_size),
 			edge_line_width: config.edge.line_width / k,
 			dash_pattern: config.edge.dash_pattern,
+			dash_alpha,
 			arrow_size: config.arrow.size_behavior.apply(config.arrow.size, k),
 			arrow_alpha,
 			cull_arrows: arrow_alpha < config.arrow.cull_alpha,

@@ -5,15 +5,19 @@ use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, MouseEvent, WheelEvent, Window};
 
+use super::particles::ParticleSystem;
 use super::render;
 use super::scale::ScaleConfig;
 use super::state::ForceGraphState;
+use super::theme::Theme;
 use super::types::GraphData;
 
-/// Internal state holder combining graph state with its scale configuration.
+/// Internal state holder combining graph state with visual configuration.
 struct GraphContext {
 	state: ForceGraphState,
 	scale: ScaleConfig,
+	theme: Theme,
+	particles: Option<ParticleSystem>,
 }
 
 #[component]
@@ -67,9 +71,19 @@ pub fn ForceGraphCanvas(
 			.unwrap()
 			.dyn_into()
 			.unwrap();
+
+		let theme = Theme::default();
+		let particles = if theme.particles.enabled {
+			Some(ParticleSystem::new(&theme.particles, w, h))
+		} else {
+			None
+		};
+
 		*context_init.borrow_mut() = Some(GraphContext {
-			state: ForceGraphState::new(&data.get(), w, h),
+			state: ForceGraphState::new(&data.get(), w, h, &theme),
 			scale: ScaleConfig::default(),
+			theme,
+			particles,
 		});
 
 		if fullscreen {
@@ -84,6 +98,9 @@ pub fn ForceGraphCanvas(
 				canvas_resize.set_height(nh as u32);
 				if let Some(ref mut c) = *context_resize.borrow_mut() {
 					c.state.resize(nw, nh);
+					if let Some(ref mut ps) = c.particles {
+						ps.resize(nw, nh);
+					}
 				}
 			}));
 			if let Some(ref cb) = *resize_cb_init.borrow() {
@@ -95,10 +112,14 @@ pub fn ForceGraphCanvas(
 		let (context_anim, animate_inner) = (context_init.clone(), animate_init.clone());
 		*animate_init.borrow_mut() = Some(Closure::new(move || {
 			if let Some(ref mut c) = *context_anim.borrow_mut() {
+				let dt = 0.016;
 				if c.state.animation_running {
-					c.state.tick(0.016);
+					c.state.tick(dt as f32);
 				}
-				render::render(&c.state, &ctx, &c.scale);
+				if let Some(ref mut ps) = c.particles {
+					ps.update(dt);
+				}
+				render::render(&c.state, &ctx, &c.scale, &c.theme, c.particles.as_ref());
 			}
 			if let Some(ref cb) = *animate_inner.borrow() {
 				let _ = web_sys::window()
