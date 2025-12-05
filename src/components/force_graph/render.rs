@@ -8,20 +8,13 @@ use super::scale::{ScaleConfig, ScaledValues};
 use super::state::{ForceGraphState, NodeInfo};
 use super::theme::{Color, Theme};
 
-// ============================================================================
-// Easing functions
-// ============================================================================
-
 /// Soft curve that gently accelerates changes near 0 and 1.
 /// This prevents abrupt visual changes at the start/end of transitions.
 fn smooth_step(t: f64) -> f64 {
 	t * t * (3.0 - 2.0 * t)
 }
 
-// ============================================================================
-// Main render entry point
-// ============================================================================
-
+/// Main render entry point
 pub fn render(
 	state: &ForceGraphState,
 	ctx: &CanvasRenderingContext2d,
@@ -58,10 +51,8 @@ pub fn render(
 	}
 }
 
-// ============================================================================
-// Background rendering
-// ============================================================================
 
+/// Background rendering
 fn draw_background(state: &ForceGraphState, ctx: &CanvasRenderingContext2d, theme: &Theme) {
 	if theme.background.use_gradient {
 		let gradient = ctx
@@ -116,10 +107,7 @@ fn draw_vignette(state: &ForceGraphState, ctx: &CanvasRenderingContext2d, theme:
 	ctx.fill_rect(0.0, 0.0, state.width, state.height);
 }
 
-// ============================================================================
-// Particle rendering
-// ============================================================================
-
+/// Particle rendering
 fn draw_particles(
 	state: &ForceGraphState,
 	ctx: &CanvasRenderingContext2d,
@@ -141,10 +129,7 @@ fn draw_particles(
 	}
 }
 
-// ============================================================================
-// Edge rendering
-// ============================================================================
-
+/// Edge rendering
 fn draw_edges(
 	state: &ForceGraphState,
 	ctx: &CanvasRenderingContext2d,
@@ -380,10 +365,7 @@ fn draw_curved_edge(
 	ctx.stroke();
 }
 
-// ============================================================================
-// Node rendering
-// ============================================================================
-
+/// Node rendering
 fn draw_nodes(
 	state: &ForceGraphState,
 	ctx: &CanvasRenderingContext2d,
@@ -404,17 +386,15 @@ fn draw_nodes(
 		state.graph.visit_nodes(|node| {
 			let idx = node.index();
 			let node_t = smooth_step(state.highlight.node_intensity(idx));
-			let is_hovered = state.highlight.is_hovered(idx);
+			let hover_t = smooth_step(state.highlight.hover_ring_intensity(idx));
 
 			// Blend glow intensity based on node's highlight state
 			let glow_mult = if node_t > 0.001 {
 				// Node is (partially) highlighted
-				let base = if is_hovered {
-					1.5 + 0.5 * node_t
-				} else {
-					1.0 + 0.3 * node_t
-				};
-				base
+				// Interpolate between neighbor glow and hovered glow based on hover_t
+				let neighbor_glow = 1.0 + 0.3 * node_t;
+				let hovered_glow = 1.5 + 0.5 * node_t;
+				neighbor_glow + (hovered_glow - neighbor_glow) * hover_t
 			} else if has_highlight {
 				// Node is not highlighted, but others are - dim it
 				1.0 - 0.7 * max_t
@@ -452,8 +432,8 @@ fn draw_nodes(
 		}
 
 		let eased_t = smooth_step(node_t);
+		let hover_t = smooth_step(state.highlight.hover_ring_intensity(idx));
 		let (x, y) = (node.x() as f64, node.y() as f64);
-		let is_hovered = state.highlight.is_hovered(idx);
 
 		// Smoothly interpolate between dimmed state and highlighted state
 		// When node_t is low, we're closer to the dimmed appearance
@@ -469,11 +449,10 @@ fn draw_nodes(
 			1.0
 		};
 
-		let highlight_radius = if is_hovered {
-			1.0 + 0.4 * eased_t
-		} else {
-			1.0 + 0.25 * eased_t
-		};
+		// Interpolate between neighbor radius and hovered radius based on hover_t
+		let neighbor_radius = 1.0 + 0.25 * eased_t;
+		let hovered_radius = 1.0 + 0.4 * eased_t;
+		let highlight_radius = neighbor_radius + (hovered_radius - neighbor_radius) * hover_t;
 
 		// Lerp between dimmed and highlighted based on eased_t
 		let alpha = dim_alpha + (1.0 - dim_alpha) * eased_t;
@@ -481,20 +460,21 @@ fn draw_nodes(
 
 		draw_node(ctx, node, scale, theme, alpha, radius_mult, pulse);
 
-		// Draw hover ring (fade with eased_t)
-		if is_hovered && eased_t > 0.01 {
+		// Draw hover ring (uses separate hover_ring_intensity for smooth fade)
+		let ring_t = smooth_step(state.highlight.hover_ring_intensity(idx));
+		if ring_t > 0.01 {
 			let node_size = node.data.user_data.size;
 			let radius = scale.node_radius * radius_mult * node_size * (1.0 + pulse);
 			ctx.begin_path();
 			let _ = ctx.arc(x, y, radius + scale.ring_offset, 0.0, 2.0 * PI);
-			ctx.set_stroke_style_str(&format!("rgba(255, 255, 255, {})", 0.8 * eased_t));
+			ctx.set_stroke_style_str(&format!("rgba(255, 255, 255, {})", 0.8 * ring_t));
 			ctx.set_line_width(scale.ring_width);
 			ctx.stroke();
 
 			// Second ring for extra glow
 			ctx.begin_path();
 			let _ = ctx.arc(x, y, radius + scale.ring_offset * 2.5, 0.0, 2.0 * PI);
-			ctx.set_stroke_style_str(&format!("rgba(255, 255, 255, {})", 0.3 * eased_t));
+			ctx.set_stroke_style_str(&format!("rgba(255, 255, 255, {})", 0.3 * ring_t));
 			ctx.set_line_width(scale.ring_width * 0.5);
 			ctx.stroke();
 		}
@@ -510,6 +490,7 @@ fn draw_nodes(
 	});
 }
 
+/// Draws the glow effect around a node.
 fn draw_node_glow(
 	ctx: &CanvasRenderingContext2d,
 	node: &force_graph::Node<NodeInfo>,
@@ -618,10 +599,7 @@ fn draw_node(
 	}
 }
 
-// ============================================================================
-// Color parsing utility
-// ============================================================================
-
+/// Color parsing utility
 fn parse_color(color_str: &str) -> Color {
 	if color_str.starts_with('#') && color_str.len() == 7 {
 		let r = u8::from_str_radix(&color_str[1..3], 16).unwrap_or(128);

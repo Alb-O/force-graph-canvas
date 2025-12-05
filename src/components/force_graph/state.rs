@@ -49,6 +49,9 @@ pub struct PanState {
 ///
 /// Uses exponential smoothing for natural-feeling transitions that slow down
 /// as they approach their target (like spring physics).
+///
+/// Includes a minimum hold time to prevent flashing when the mouse briefly
+/// skirts the edge of a node's hover zone.
 #[derive(Clone, Debug, Default)]
 pub struct HighlightState {
 	/// Currently hovered node (if any)
@@ -58,9 +61,17 @@ pub struct HighlightState {
 	/// Per-node highlight intensity (0.0 = not highlighted, 1.0 = fully highlighted)
 	/// Nodes not in this map have intensity 0.
 	node_intensity: HashMap<DefaultNodeIdx, f64>,
+	/// Smoothed hover intensity for the ring effect (tracks hovered_node with hold time)
+	hover_ring_intensity: HashMap<DefaultNodeIdx, f64>,
+	/// Per-node hold timer - time remaining before fade-out can begin
+	hold_timer: HashMap<DefaultNodeIdx, f64>,
 	/// Cached max intensity (updated each tick)
 	cached_max: f64,
 }
+
+/// Minimum time (seconds) a highlight must be held before it can fade out.
+/// This prevents flashing when the mouse briefly touches a hover zone.
+const MIN_HOLD_TIME: f64 = 0.12;
 
 impl HighlightState {
 	/// Update the hovered node and recompute the target highlight set.
@@ -87,6 +98,11 @@ impl HighlightState {
 					self.target_set.insert(src);
 				}
 			}
+
+			// Reset hold timers for newly highlighted nodes
+			for &idx in &self.target_set {
+				self.hold_timer.insert(idx, MIN_HOLD_TIME);
+			}
 		}
 	}
 
@@ -111,8 +127,26 @@ impl HighlightState {
 			*intensity += (1.0 - *intensity) * fade_in_factor;
 		}
 
+		// Animate hover ring intensity (only for the hovered node)
+		if let Some(idx) = self.hovered_node {
+			let intensity = self.hover_ring_intensity.entry(idx).or_insert(0.0);
+			*intensity += (1.0 - *intensity) * fade_in_factor;
+		}
+
 		// Track max for caching
 		let mut new_max: f64 = 0.0;
+
+		// Update hold timers and animate fade-out
+		self.hold_timer.retain(|idx, timer| {
+			if self.target_set.contains(idx) {
+				// Node is still highlighted, keep the timer
+				true
+			} else {
+				// Node is no longer in target set, count down
+				*timer -= dt;
+				*timer > 0.0
+			}
+		});
 
 		// Animate nodes not in target set (fade out) and remove when done
 		self.node_intensity.retain(|idx, intensity| {
@@ -120,10 +154,28 @@ impl HighlightState {
 				new_max = new_max.max(*intensity);
 				true
 			} else {
-				// Exponential decay towards 0.0
-				*intensity *= fade_out_decay;
+				// Only fade out if hold timer has expired
+				let hold_remaining = self.hold_timer.get(idx).copied().unwrap_or(0.0);
+				if hold_remaining <= 0.0 {
+					// Exponential decay towards 0.0
+					*intensity *= fade_out_decay;
+				}
 				new_max = new_max.max(*intensity);
 				*intensity > 0.005 // Keep only if still visible
+			}
+		});
+
+		// Animate hover ring fade-out (respects hold timer)
+		self.hover_ring_intensity.retain(|idx, intensity| {
+			if self.hovered_node == Some(*idx) {
+				true // Still hovered, keep at current intensity
+			} else {
+				// Only fade out if hold timer has expired
+				let hold_remaining = self.hold_timer.get(idx).copied().unwrap_or(0.0);
+				if hold_remaining <= 0.0 {
+					*intensity *= fade_out_decay;
+				}
+				*intensity > 0.005
 			}
 		});
 
@@ -135,6 +187,11 @@ impl HighlightState {
 		self.node_intensity.get(&idx).copied().unwrap_or(0.0)
 	}
 
+	/// Get the hover ring intensity for a specific node (smoothed, with hold time).
+	pub fn hover_ring_intensity(&self, idx: DefaultNodeIdx) -> f64 {
+		self.hover_ring_intensity.get(&idx).copied().unwrap_or(0.0)
+	}
+
 	/// Get the highlight intensity for an edge.
 	/// Uses geometric mean for smoother edge transitions that don't lag behind nodes.
 	pub fn edge_intensity(&self, idx1: DefaultNodeIdx, idx2: DefaultNodeIdx) -> f64 {
@@ -142,11 +199,6 @@ impl HighlightState {
 		let i2 = self.node_intensity(idx2);
 		// Geometric mean is smoother than min for transitions
 		(i1 * i2).sqrt()
-	}
-
-	/// Check if a node is the currently hovered node.
-	pub fn is_hovered(&self, idx: DefaultNodeIdx) -> bool {
-		self.hovered_node == Some(idx)
 	}
 
 	/// Get the maximum intensity of any node (useful for dimming non-highlighted elements).
