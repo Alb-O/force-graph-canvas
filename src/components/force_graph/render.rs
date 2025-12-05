@@ -1,3 +1,11 @@
+//! Canvas rendering for the force graph.
+//!
+//! Handles all drawing operations: background, edges, nodes, labels, and effects.
+//! Rendering uses multiple passes for correct z-ordering:
+//! 1. Background and particles (screen space)
+//! 2. Edge glows, then edge lines (world space)
+//! 3. Node glows, non-highlighted nodes, then highlighted nodes on top
+
 use std::f64::consts::PI;
 
 use wasm_bindgen::JsValue;
@@ -8,13 +16,12 @@ use super::scale::{ScaleConfig, ScaledValues};
 use super::state::{ForceGraphState, NodeInfo};
 use super::theme::{Color, Theme};
 
-/// Soft curve that gently accelerates changes near 0 and 1.
-/// This prevents abrupt visual changes at the start/end of transitions.
+/// Attempt to smooth values that would otherwise cause abrupt visual changes.
 fn smooth_step(t: f64) -> f64 {
 	t * t * (3.0 - 2.0 * t)
 }
 
-/// Main render entry point
+/// Renders the complete graph to the canvas.
 pub fn render(
 	state: &ForceGraphState,
 	ctx: &CanvasRenderingContext2d,
@@ -24,35 +31,26 @@ pub fn render(
 ) {
 	let scale = ScaledValues::new(config, state.transform.k);
 
-	// Draw background with optional gradient and vignette
 	draw_background(state, ctx, theme);
 
-	// Draw particles in screen space (before transform)
 	if let Some(ps) = particles {
 		draw_particles(state, ctx, theme, ps);
 	}
 
-	// Apply world transform
 	ctx.save();
 	let _ = ctx.translate(state.transform.x, state.transform.y);
 	let _ = ctx.scale(state.transform.k, state.transform.k);
 
-	// Draw edges with glow
 	draw_edges(state, ctx, config, &scale, theme);
-
-	// Draw nodes with all effects
 	draw_nodes(state, ctx, config, &scale, theme);
 
 	ctx.restore();
 
-	// Draw vignette overlay (screen space)
 	if theme.background.vignette > 0.0 {
 		draw_vignette(state, ctx, theme);
 	}
 }
 
-
-/// Background rendering
 fn draw_background(state: &ForceGraphState, ctx: &CanvasRenderingContext2d, theme: &Theme) {
 	if theme.background.use_gradient {
 		let gradient = ctx
@@ -107,7 +105,6 @@ fn draw_vignette(state: &ForceGraphState, ctx: &CanvasRenderingContext2d, theme:
 	ctx.fill_rect(0.0, 0.0, state.width, state.height);
 }
 
-/// Particle rendering
 fn draw_particles(
 	state: &ForceGraphState,
 	ctx: &CanvasRenderingContext2d,
@@ -129,7 +126,6 @@ fn draw_particles(
 	}
 }
 
-/// Edge rendering
 fn draw_edges(
 	state: &ForceGraphState,
 	ctx: &CanvasRenderingContext2d,
@@ -140,14 +136,12 @@ fn draw_edges(
 	let dash_offset = scale.dash_offset(state.flow_time, config.edge.flow_speed);
 	let k = scale.k;
 
-	// First pass: draw glow layer if enabled
 	if theme.edge.glow_intensity > 0.0 {
 		state.graph.visit_edges(|n1, n2, _| {
 			draw_edge_glow(state, ctx, scale, theme, n1, n2);
 		});
 	}
 
-	// Second pass: draw main edges
 	state.graph.visit_edges(|n1, n2, _| {
 		draw_edge_main(state, ctx, config, scale, theme, n1, n2, dash_offset, k);
 	});
@@ -170,11 +164,9 @@ fn draw_edge_glow(
 		return;
 	}
 
-	// Get per-edge highlight intensity
 	let edge_t = state.highlight.edge_intensity(n1.index(), n2.index());
 	let max_t = state.highlight.max_intensity();
 
-	// Glow intensity: highlighted edges glow more, others dim when something is highlighted
 	let glow_alpha = if edge_t > 0.01 {
 		theme.edge.glow_intensity * (0.6 + 0.4 * smooth_step(edge_t))
 	} else if max_t > 0.01 {
@@ -222,6 +214,7 @@ fn draw_edge_glow(
 	}
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_edge_main(
 	state: &ForceGraphState,
 	ctx: &CanvasRenderingContext2d,
@@ -240,29 +233,26 @@ fn draw_edge_main(
 		return;
 	}
 
-	// Get per-edge highlight intensity (already smoothed from state)
 	let edge_t = smooth_step(state.highlight.edge_intensity(n1.index(), n2.index()));
 	let max_t = smooth_step(state.highlight.max_intensity());
 
 	let (edge_alpha, base_arrow_alpha, base_width) = if edge_t > 0.01 {
-		// This edge is highlighted
 		(
 			0.7 + 0.3 * edge_t,
 			0.9 + 0.1 * edge_t,
 			scale.edge_line_width * (1.0 + 0.4 * edge_t),
 		)
 	} else if max_t > 0.01 {
-		// Not highlighted, but something else is - dim this edge
 		(
 			0.7 - 0.5 * max_t,
 			0.9 - 0.6 * max_t,
 			scale.edge_line_width * (1.0 - 0.3 * max_t),
 		)
 	} else {
-		// Nothing is highlighted - normal state
 		(0.7, 0.9, scale.edge_line_width)
 	};
-	// Make edges slightly thicker when dash fades out (solid lines)
+
+	// Compensate for dash pattern fading to solid
 	let width = base_width * (1.0 + 0.3 * (1.0 - scale.dash_alpha));
 	let arrow_alpha = base_arrow_alpha * scale.arrow_alpha;
 
@@ -276,7 +266,7 @@ fn draw_edge_main(
 	));
 	ctx.set_line_width(width);
 
-	// Interpolate dash pattern based on zoom - fade to solid line when zoomed out
+	// Fade dash pattern to solid when zoomed out
 	let effective_gap = scale.dash_pattern.1 * scale.dash_alpha;
 	if effective_gap > 0.1 {
 		let _ = ctx.set_line_dash(&js_sys::Array::of2(
@@ -285,7 +275,6 @@ fn draw_edge_main(
 		));
 		ctx.set_line_dash_offset(dash_offset);
 	} else {
-		// Solid line when zoomed out
 		let _ = ctx.set_line_dash(&js_sys::Array::new());
 	}
 
@@ -313,7 +302,6 @@ fn draw_edge_main(
 		ctx.stroke();
 	}
 
-	// Draw arrow
 	if !scale.cull_arrows && arrow_alpha > 0.0 {
 		let _ = ctx.set_line_dash(&js_sys::Array::new());
 		ctx.set_fill_style_str(&format!(
@@ -337,6 +325,7 @@ fn draw_edge_main(
 	}
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_curved_edge(
 	ctx: &CanvasRenderingContext2d,
 	x1: f64,
@@ -351,7 +340,6 @@ fn draw_curved_edge(
 	let (dx, dy) = (x2 - x1, y2 - y1);
 	let dist = (dx * dx + dy * dy).sqrt();
 
-	// Perpendicular offset for curve control point
 	let curve_offset = dist * tension * 0.3;
 	let (px, py) = (-uy * curve_offset, ux * curve_offset);
 
@@ -365,7 +353,6 @@ fn draw_curved_edge(
 	ctx.stroke();
 }
 
-/// Node rendering
 fn draw_nodes(
 	state: &ForceGraphState,
 	ctx: &CanvasRenderingContext2d,
@@ -381,22 +368,18 @@ fn draw_nodes(
 		0.0
 	};
 
-	// First pass: draw all node glows
+	// Pass 1: node glows
 	if theme.node.glow_intensity > 0.0 {
 		state.graph.visit_nodes(|node| {
 			let idx = node.index();
 			let node_t = smooth_step(state.highlight.node_intensity(idx));
 			let hover_t = smooth_step(state.highlight.hover_ring_intensity(idx));
 
-			// Blend glow intensity based on node's highlight state
 			let glow_mult = if node_t > 0.001 {
-				// Node is (partially) highlighted
-				// Interpolate between neighbor glow and hovered glow based on hover_t
 				let neighbor_glow = 1.0 + 0.3 * node_t;
 				let hovered_glow = 1.5 + 0.5 * node_t;
 				neighbor_glow + (hovered_glow - neighbor_glow) * hover_t
 			} else if has_highlight {
-				// Node is not highlighted, but others are - dim it
 				1.0 - 0.7 * max_t
 			} else {
 				1.0
@@ -406,11 +389,10 @@ fn draw_nodes(
 		});
 	}
 
-	// Second pass: draw all nodes (non-highlighted first for z-order)
+	// Pass 2: non-highlighted nodes
 	state.graph.visit_nodes(|node| {
 		let idx = node.index();
 		let node_t = state.highlight.node_intensity(idx);
-		// Skip nodes with any highlight - they'll be drawn on top
 		if node_t > 0.001 {
 			return;
 		}
@@ -422,22 +404,18 @@ fn draw_nodes(
 		draw_node(ctx, node, scale, theme, alpha, radius_mult, pulse);
 	});
 
-	// Third pass: draw highlighted/transitioning nodes on top
-	// Sort by intensity so more highlighted nodes are drawn last (on top)
+	// Pass 3: highlighted/transitioning nodes on top
 	state.graph.visit_nodes(|node| {
 		let idx = node.index();
 		let node_t = state.highlight.node_intensity(idx);
 		if node_t <= 0.001 {
-			return; // Already drawn in non-highlighted pass
+			return;
 		}
 
 		let eased_t = smooth_step(node_t);
 		let hover_t = smooth_step(state.highlight.hover_ring_intensity(idx));
 		let (x, y) = (node.x() as f64, node.y() as f64);
 
-		// Smoothly interpolate between dimmed state and highlighted state
-		// When node_t is low, we're closer to the dimmed appearance
-		// When node_t is high, we're fully highlighted
 		let dim_alpha = if has_highlight {
 			1.0 - 0.7 * max_t
 		} else {
@@ -449,18 +427,15 @@ fn draw_nodes(
 			1.0
 		};
 
-		// Interpolate between neighbor radius and hovered radius based on hover_t
 		let neighbor_radius = 1.0 + 0.25 * eased_t;
 		let hovered_radius = 1.0 + 0.4 * eased_t;
 		let highlight_radius = neighbor_radius + (hovered_radius - neighbor_radius) * hover_t;
 
-		// Lerp between dimmed and highlighted based on eased_t
 		let alpha = dim_alpha + (1.0 - dim_alpha) * eased_t;
 		let radius_mult = dim_radius + (highlight_radius - dim_radius) * eased_t;
 
 		draw_node(ctx, node, scale, theme, alpha, radius_mult, pulse);
 
-		// Draw hover ring (uses separate hover_ring_intensity for smooth fade)
 		let ring_t = smooth_step(state.highlight.hover_ring_intensity(idx));
 		if ring_t > 0.01 {
 			let node_size = node.data.user_data.size;
@@ -471,7 +446,6 @@ fn draw_nodes(
 			ctx.set_line_width(scale.ring_width);
 			ctx.stroke();
 
-			// Second ring for extra glow
 			ctx.begin_path();
 			let _ = ctx.arc(x, y, radius + scale.ring_offset * 2.5, 0.0, 2.0 * PI);
 			ctx.set_stroke_style_str(&format!("rgba(255, 255, 255, {})", 0.3 * ring_t));
@@ -479,7 +453,6 @@ fn draw_nodes(
 			ctx.stroke();
 		}
 
-		// Label
 		if let Some(label) = &node.data.user_data.label {
 			let node_size = node.data.user_data.size;
 			let radius = scale.node_radius * radius_mult * node_size * (1.0 + pulse);
@@ -490,7 +463,6 @@ fn draw_nodes(
 	});
 }
 
-/// Draws the glow effect around a node.
 fn draw_node_glow(
 	ctx: &CanvasRenderingContext2d,
 	node: &force_graph::Node<NodeInfo>,
@@ -509,7 +481,6 @@ fn draw_node_glow(
 		return;
 	}
 
-	// Parse node color for glow tinting
 	let node_color = parse_color(&node.data.user_data.color);
 
 	let gradient = ctx
@@ -551,7 +522,6 @@ fn draw_node(
 	ctx.set_global_alpha(alpha);
 
 	if theme.node.use_gradient {
-		// Create gradient for 3D effect
 		let gradient = ctx
 			.create_radial_gradient(x - radius * 0.3, y - radius * 0.3, 0.0, x, y, radius)
 			.unwrap();
@@ -576,7 +546,6 @@ fn draw_node(
 		ctx.fill();
 	}
 
-	// Border
 	if theme.node.border_width > 0.0 {
 		ctx.begin_path();
 		let _ = ctx.arc(x, y, radius, 0.0, 2.0 * PI);
@@ -587,7 +556,6 @@ fn draw_node(
 
 	ctx.set_global_alpha(1.0);
 
-	// Label for non-highlighted nodes
 	if let Some(label) = &node.data.user_data.label {
 		if alpha > 0.5 {
 			ctx.set_global_alpha(alpha * 0.8);
@@ -599,7 +567,8 @@ fn draw_node(
 	}
 }
 
-/// Color parsing utility
+/// Parses a CSS color string into a [`Color`].
+/// Supports hex (`#RRGGBB`) and `rgb()`/`rgba()` functional notation.
 fn parse_color(color_str: &str) -> Color {
 	if color_str.starts_with('#') && color_str.len() == 7 {
 		let r = u8::from_str_radix(&color_str[1..3], 16).unwrap_or(128);
@@ -607,7 +576,6 @@ fn parse_color(color_str: &str) -> Color {
 		let b = u8::from_str_radix(&color_str[5..7], 16).unwrap_or(128);
 		Color::rgb(r, g, b)
 	} else if color_str.starts_with("rgb") {
-		// Simple rgba parsing
 		let nums: Vec<&str> = color_str
 			.trim_start_matches("rgba(")
 			.trim_start_matches("rgb(")

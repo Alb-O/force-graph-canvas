@@ -1,3 +1,9 @@
+//! Leptos component wrapping the force-directed graph canvas.
+//!
+//! The component creates an HTML canvas element and wires up mouse/wheel event
+//! handlers for node dragging, panning, and zooming. An animation loop runs via
+//! `requestAnimationFrame`, calling the physics simulation and renderer each frame.
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -12,7 +18,7 @@ use super::state::ForceGraphState;
 use super::theme::Theme;
 use super::types::GraphData;
 
-/// Internal state holder combining graph state with visual configuration.
+/// Bundles graph simulation state with visual configuration (scaling, theme, particles).
 struct GraphContext {
 	state: ForceGraphState,
 	scale: ScaleConfig,
@@ -20,6 +26,12 @@ struct GraphContext {
 	particles: Option<ParticleSystem>,
 }
 
+/// Renders an interactive force-directed graph on a canvas element.
+///
+/// Pass graph data via the reactive `data` signal. The component sizes itself
+/// to its parent container by default; set `fullscreen = true` to fill the
+/// viewport and resize automatically with the window. Explicit `width`/`height`
+/// override automatic sizing.
 #[component]
 pub fn ForceGraphCanvas(
 	#[prop(into)] data: Signal<GraphData>,

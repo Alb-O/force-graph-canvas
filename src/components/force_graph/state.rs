@@ -1,3 +1,9 @@
+//! Graph simulation state and interaction tracking.
+//!
+//! Wraps the `force_graph` physics simulation with per-node metadata, view
+//! transforms for pan/zoom, and highlight state for hover effects with smooth
+//! intensity transitions.
+
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 
@@ -7,6 +13,7 @@ use super::scale::{ScaleConfig, ScaledValues};
 use super::theme::Theme;
 use super::types::GraphData;
 
+/// Per-node display metadata attached to each node in the simulation.
 #[derive(Clone, Debug, Default)]
 pub struct NodeInfo {
 	pub label: Option<String>,
@@ -15,13 +22,16 @@ pub struct NodeInfo {
 	pub size: f64,
 }
 
+/// Pan and zoom transform applied to the entire graph view.
 #[derive(Clone, Debug, Default)]
 pub struct ViewTransform {
 	pub x: f64,
 	pub y: f64,
+	/// Zoom factor (1.0 = 100%, clamped to 0.1..10.0).
 	pub k: f64,
 }
 
+/// Tracks an in-progress node drag operation.
 #[derive(Clone, Debug, Default)]
 pub struct DragState {
 	pub active: bool,
@@ -32,6 +42,7 @@ pub struct DragState {
 	pub node_start_y: f32,
 }
 
+/// Tracks an in-progress canvas pan operation.
 #[derive(Clone, Debug, Default)]
 pub struct PanState {
 	pub active: bool,
@@ -207,6 +218,11 @@ impl HighlightState {
 	}
 }
 
+/// Core graph state combining physics simulation with interaction and highlight tracking.
+///
+/// Created once when the component mounts, then mutated each frame by the
+/// animation loop. The `tick` method advances the physics simulation and
+/// animates highlight intensities.
 pub struct ForceGraphState {
 	pub graph: ForceGraph<NodeInfo, ()>,
 	pub transform: ViewTransform,
