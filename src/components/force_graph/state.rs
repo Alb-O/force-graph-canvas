@@ -144,7 +144,8 @@ impl ForceGraphState {
 		let mut found = None;
 		self.graph.visit_nodes(|node| {
 			let (dx, dy) = (node.x() as f64 - gx, node.y() as f64 - gy);
-			if (dx * dx + dy * dy).sqrt() < HIT_RADIUS / self.transform.k {
+			// HIT_RADIUS is in world-space, scales with zoom like nodes
+			if (dx * dx + dy * dy).sqrt() < HIT_RADIUS {
 				found = Some(node.index());
 			}
 		});

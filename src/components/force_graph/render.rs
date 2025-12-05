@@ -22,8 +22,11 @@ pub fn render(state: &ForceGraphState, ctx: &CanvasRenderingContext2d) {
 
 fn draw_edges(state: &ForceGraphState, ctx: &CanvasRenderingContext2d) {
 	let k = state.transform.k;
-	let (line_width, dash, gap, arrow_size) = (1.5 / k, 8.0 / k, 4.0 / k, 8.0 / k);
-	let dash_offset = -(state.flow_time * 30.0) % (dash + gap);
+	// Line width and arrow size scale inversely with zoom for constant screen size.
+	// Dash pattern stays in world-space and scales with content.
+	let (line_width, arrow_size) = (1.5 / k, 8.0 / k);
+	let (dash, gap) = (8.0, 4.0);
+	let dash_offset = -state.flow_time * 30.0;
 	let t = ease_out_cubic(state.hover.highlight_t);
 
 	state.graph.visit_edges(|n1, n2, _| {
